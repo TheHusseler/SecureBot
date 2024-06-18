@@ -1,12 +1,12 @@
 import discord
-from discord import app_commands
+from discord import app_commands, MessageType
 from discord.ext import tasks, commands
 from config_manager import BotConfig, ConfigModal, ConfigView
 import datetime
 import json
 
-#Task is timed for 10 UTC, or 4 central
-cleanUpTimes = [datetime.time(hour=13, minute=30, tzinfo=datetime.timezone.utc)]
+#Task is timed for 9 UTC, or 4 central
+cleanUpTimes = [datetime.time(hour=21, minute=8, tzinfo=datetime.timezone.utc)]
 
 intents=discord.Intents.default()
 intents.typing = False
@@ -91,14 +91,14 @@ async def clean_up_messages(guildId) -> int:
 
 def should_delete(message) -> bool:
     global count
-    age = discord.utils.utcnow() - message.created_at
     guildId = str(message.guild.id)
     deleteBotMessages = (bot_config.get_guild_data(guildId, "DELETE_BOT_MESSAGES") == "True")
     saveEmojiName = bot_config.get_guild_data(guildId, "SAVE_EMOJI_NAME")
     return (not message.pinned 
         and not has_save_emoji(message, saveEmojiName) 
         and (message.author != bot.user or deleteBotMessages)
-        and not message.is_system())
+        and not message.is_system()
+        and not message.type is MessageType.thread_starter_message)
 
 def has_save_emoji(message, saveEmojiName) -> bool:
     for reaction in message.reactions:
