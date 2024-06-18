@@ -6,7 +6,7 @@ import datetime
 import json
 
 #Task is timed for 9 UTC, or 4 central
-cleanUpTimes = [datetime.time(hour=21, minute=8, tzinfo=datetime.timezone.utc)]
+cleanUpTimes = [datetime.time(hour=9, minute=0, tzinfo=datetime.timezone.utc)]
 
 intents=discord.Intents.default()
 intents.typing = False
@@ -68,7 +68,7 @@ async def clean_up(interaction):
 async def clean_up_messages(guildId) -> int:
     count = 0
     messageAgeLimit = int(bot_config.get_guild_data(str(guildId), "MESSAGE_AGE_LIMIT"))
-    date = discord.utils.utcnow() - datetime.timedelta(hours=messageAgeLimit)
+    date = discord.utils.utcnow() - datetime.timedelta(days=messageAgeLimit)
     for channel in bot.get_guild(int(guildId)).text_channels:
         try:
             deleted = await channel.purge(limit=None, check=should_delete, before=date)
