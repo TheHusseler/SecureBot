@@ -58,7 +58,11 @@ def has_mod_role():
 )
 @has_mod_role()
 async def clean_up(interaction):
-    await interaction.response.defer()  # Defer the response to prevent timeout
+    await interaction.response.defer()  # Defer the response to prevent timeout 
+    enabled = (bot_config.get_guild_data(str(interaction.guild_id), "DELETE_ENABLED")  == "True")
+    if not enabled:
+        await interaction.followup.send("Deletion is not enabled.")
+        return
     deleted = await clean_up_messages(interaction.guild_id)
     try:
         await interaction.followup.send(f"Deleted {deleted} messages by command for guild {interaction.guild_id}.")
@@ -68,7 +72,7 @@ async def clean_up(interaction):
 async def clean_up_messages(guildId) -> int:
     count = 0
     messageAgeLimit = int(bot_config.get_guild_data(str(guildId), "MESSAGE_AGE_LIMIT"))
-    date = discord.utils.utcnow() - datetime.timedelta(days=messageAgeLimit)
+    date = discord.utils.utcnow() - datetime.timedelta(hours=messageAgeLimit)
     for channel in bot.get_guild(int(guildId)).text_channels:
         try:
             deleted = await channel.purge(limit=None, check=should_delete, before=date)
@@ -200,6 +204,44 @@ async def sync(interaction: discord.Interaction):
         print(f"Failed to sync: {e}")
         await interaction.response.send_message(f'Failed to sync commands: {e}', ephemeral=True)
 
+@bot.tree.command(name="enable-delete", description="Enable the deletion of messages.")
+@has_mod_role()
+async def enable_delete(interaction: discord.Interaction):
+    try:
+        enabled = (bot_config.get_guild_data(str(interaction.guild_id), "DELETE_ENABLED")  == "True")
+        if enabled:
+            await interaction.response.send_message(f'Deletion is already enabled.', ephemeral=True)
+            return
+        bot_config.set_guild_data(str(interaction.guild_id), "DELETE_ENABLED", True)
+        await interaction.response.send_message(f'CDeletion enabled.', ephemeral=True)
+    except Exception as e:
+        print(f"Failed to enable deletion: {e}")
+        await interaction.response.send_message(f'Failed to enable deletion: {e}', ephemeral=True)
+
+@bot.tree.command(name="disable-delete", description="Disable the deletion of messages.")
+@has_mod_role()
+async def disable_delete(interaction: discord.Interaction):
+    try:
+        enabled = (bot_config.get_guild_data(str(interaction.guild_id), "DELETE_ENABLED")  == "True")
+        if not enabled:
+            await interaction.response.send_message(f'Deletion is already disabled.', ephemeral=True)
+            return
+        bot_config.set_guild_data(str(interaction.guild_id), "DELETE_ENABLED", False)
+        await interaction.response.send_message(f'Deletion disabled.', ephemeral=True)
+    except Exception as e:
+        print(f"Failed to disable deletion: {e}")
+        await interaction.response.send_message(f'Failed to disable deletion: {e}', ephemeral=True)
+
+@bot.tree.command(name="is-delete-enabled", description="Check if deletion is enabled.")
+@has_mod_role()
+async def is_delete_enabled(interaction: discord.Interaction):
+    try:
+        enabled = (bot_config.get_guild_data(str(interaction.guild_id), "DELETE_ENABLED")  == "True")
+        await interaction.response.send_message(f'Deletion enabled: {enabled}', ephemeral=True)
+    except Exception as e:
+        print(f"Failed to check if deletion is enabled: {e}")
+        await interaction.response.send_message(f'Failed to check if deletion is enabled: {e}', ephemeral=True)
+
 class DailyAction(commands.Cog):
     def __init__(self, bot, bot_config) -> None:
         self.bot = bot
@@ -212,6 +254,9 @@ class DailyAction(commands.Cog):
         guilds = self.bot_config.config["GUILDS"].items();
         for guild_id, guild in guilds:
             guild_id_str = str(guild_id)
+            enabled = (bot_config.get_guild_data(guild_id_str), "DELETE_ENABLED")  == "True")
+            if not enabled:
+                continue
             messageAgeLimit = int(self.bot_config.get_guild_data(guild_id_str, "MESSAGE_AGE_LIMIT"))
             await log(f"Cleaning up messages that aren't saved and are over {messageAgeLimit} days old.", guild_id_str)
             deleted = await clean_up_messages(guild_id)
