@@ -5,6 +5,8 @@ from config_manager import BotConfig, ConfigModal, ConfigView
 import datetime
 import json
 
+
+BOT_TOKEN = "YOUR BOT TOKEN HERE"
 #Task is timed for 9 UTC, or 4 central
 cleanUpTimes = [datetime.time(hour=9, minute=0, tzinfo=datetime.timezone.utc)]
 
@@ -254,7 +256,7 @@ class DailyAction(commands.Cog):
         guilds = self.bot_config.config["GUILDS"].items();
         for guild_id, guild in guilds:
             guild_id_str = str(guild_id)
-            enabled = (bot_config.get_guild_data(guild_id_str), "DELETE_ENABLED")  == "True")
+            enabled = (bot_config.get_guild_data(guild_id_str, "DELETE_ENABLED")  == "True")
             if not enabled:
                 continue
             messageAgeLimit = int(self.bot_config.get_guild_data(guild_id_str, "MESSAGE_AGE_LIMIT"))
