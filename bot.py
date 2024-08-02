@@ -176,6 +176,37 @@ async def log(message, guildId):
     except Exception as e:
         print(f"Failed to log message to guild {guildId}: {e}")
 
+#Command to log all messages with the reaction currently in the server
+@bot.tree.command(
+    name="log-saved-messages",
+    description="Log all messages with the reaction currently in the server."
+)
+@has_mod_role()
+async def log_saved_messages(interaction):
+    await interaction.response.defer()  # Defer the response to prevent timeout 
+    saveEmojiName = bot_config.get_guild_data(str(interaction.guild_id), "SAVE_EMOJI_NAME")
+    logChannel = bot_config.get_guild_data(str(interaction.guild_id), "BOT_LOGS_CHANNEL")
+    count = 0
+    for channel in bot.get_guild(interaction.guild_id).text_channels:
+        count += await log_saved_messages_in_channel(channel, saveEmojiName, logChannel)
+        for thread in channel.threads:
+            count += await log_saved_messages_in_channel(thread, saveEmojiName, logChannel)
+    await interaction.followup.send(f"Logged {count} saved messages.", ephemeral=True)
+
+async def log_saved_messages_in_channel(channel, saveEmojiName, logChannel) -> int:
+    saveEmojiName = bot_config.get_guild_data(str(channel.guild.id), "SAVE_EMOJI_NAME")
+    count = 0
+    async for message in channel.history(limit=None):
+        if has_save_emoji(message, saveEmojiName):
+            embedVar = discord.Embed(title=f"Saved post", color=0x00ff00)
+            embedVar.add_field(name="Link", value=f"{message.jump_url}", inline=True)
+            embedVar.add_field(name="Author", value=f"{message.author.display_name}", inline=True)
+            embedVar.add_field(name="Channel", value=f"{channel.name}")
+            embedVar.add_field(name="Content Preview", value=f"{message.content[:100]}", inline=True)
+            await bot.get_channel(logChannel).send(embed=embedVar)
+            count += 1
+    return count;
+
 #Command to check if bot is running
 @bot.tree.command(
     name="bot-check",

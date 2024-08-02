@@ -9,6 +9,7 @@ from discord.ext import commands
 #{
 #     "GUILDS": {
 #         "GUILD ID as key": {
+#             "DELETE_ENABLED": True/False,
 #             "MOD_ROLE": role id, role for moderators
 #             "NOTIFICATIONS_CHANNEL": channel id, Notifications for when a user leaves or other misc notifications
 #             "BOT_LOGS_CHANNEL": channel id, logs details for the bot's functionality and debugging
@@ -47,6 +48,8 @@ class BotConfig:
         guild = self.config["GUILDS"][guild_id]
         return guild[data_name]
 
+    def set_guild_data(self, guild_id, data_name, value):
+        self.config["GUILDS"][guild_id][data_name] = value
 
 class ConfigModal(Modal):
     bot_config: BotConfig
@@ -102,7 +105,7 @@ class ConfigView(View):
             placeholder="Select Moderator Role",
             custom_id="mod_role_select"
         )
-        
+
         self.notifications_channel_select = ChannelSelect(
             placeholder="Select Notifications Channel",
             custom_id="notifications_channel_select",
