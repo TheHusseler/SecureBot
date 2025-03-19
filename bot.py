@@ -1,4 +1,5 @@
 import discord
+import asyncio
 from discord import app_commands, MessageType
 from discord.ext import tasks, commands
 from config_manager import BotConfig, ConfigModal, ConfigView
@@ -17,6 +18,7 @@ intents.messages = True
 intents.members = True
 intents.reactions = True
 
+
 #Necessary Permissions
 #permissions integer (untested): 67202112
 
@@ -26,6 +28,7 @@ bot = commands.Bot(command_prefix="!", intents=intents,
 
 bot_config = BotConfig()
 count = 0
+is_processing_clean_up = False
 
 #Notifications for users leaving/joining
 @bot.event
@@ -66,34 +69,115 @@ async def clean_up(interaction):
         await interaction.followup.send("Deletion is not enabled.")
         return
     deleted = await clean_up_messages(interaction.guild_id)
+    if deleted == -1:
+        await interaction.edit_original_response(content="Clean-up is already in progress. Please wait for it to finish.")
+        return
     try:
-        await interaction.followup.send(f"Deleted {deleted} messages by command for guild {interaction.guild_id}.")
+        await interaction.edit_original_response(content=f"Deleted {deleted} messages by command for guild {interaction.guild_id}.")
     except discord.errors.NotFound:
         print("Interaction not found. Possibly due to timing issues.")
 
 async def clean_up_messages(guildId) -> int:
+    global count
     count = 0
-    messageAgeLimit = int(bot_config.get_guild_data(str(guildId), "MESSAGE_AGE_LIMIT"))
-    date = discord.utils.utcnow() - datetime.timedelta(hours=messageAgeLimit)
-    for channel in bot.get_guild(int(guildId)).text_channels:
-        try:
-            deleted = await channel.purge(limit=None, check=should_delete, before=date)
-            count += len(deleted)
-        except Exception as e:
-            print(f"Error deleting messages in channel {channel.id}: {e}")
-    for channel in bot.get_guild(int(guildId)).voice_channels:
-        try:
-            deleted = await channel.purge(limit=None, check=should_delete, before=date)
-            count += len(deleted)
-        except Exception as e:
-            print(f"Error deleting messages in voice channel {channel.id}: {e}")
-    for thread in bot.get_guild(int(guildId)).threads:
-        try:
-            deleted = await thread.purge(limit=None, check=should_delete, before=date)
-            count += len(deleted)
-        except Exception as e:
-            print(f"Error deleting messages in thread {thread.id}: {e}")
-    return count
+    global is_processing_clean_up
+    if is_processing_clean_up:
+        return -1
+    try:
+        is_processing_clean_up = True
+        messageAgeLimit = int(bot_config.get_guild_data(str(guildId), "MESSAGE_AGE_LIMIT"))
+        date = discord.utils.utcnow() - datetime.timedelta(days=messageAgeLimit)
+        print(f"Deleting messages older than {date} for guild {guildId}")
+        for channel in bot.get_guild(int(guildId)).text_channels:
+            try:
+                await asyncio.sleep(1)
+                # deleted = await channel.purge(limit=None, check=should_delete, before=date)
+                print(f"Deleting messages in channel {channel}")
+                deleted = await rate_limit_purge(channel, batch_size=500, check=should_delete, before=date)
+                count += deleted
+                print(f"Deleted messages in channel {channel}. Total Deleted so far: {count}")
+            except Exception as e:
+                print(f"Error deleting messages in channel {channel}: {repr(e)}")
+        for channel in bot.get_guild(int(guildId)).voice_channels:
+            try:
+                await asyncio.sleep(1)
+                # deleted = await channel.purge(limit=None, check=should_delete, before=date)
+                print(f"Deleting messages in channel {channel}")
+                deleted = await rate_limit_purge(channel, batch_size=500, check=should_delete, before=date)
+                count += deleted
+                print(f"Deleted messages in channel {channel}. Total Deleted so far: {count}")
+            except Exception as e:
+                print(f"Error deleting messages in voice channel {channel}: {repr(e)}")
+        threads = bot.get_guild(int(guildId)).threads
+        print(f"Deleting messages in threads for guild {guildId}: Total threadcount: {len(threads)}")
+        for thread in threads:
+            try:
+                await asyncio.sleep(1)
+                # deleted = await thread.purge(limit=None, check=should_delete, before=date)
+                print(f"Deleting messages in thread {thread}")
+                deleted = await rate_limit_purge(channel, batch_size=500, check=should_delete, before=date)
+                count += deleted
+                print(f"Deleted messages in thread {thread}. Total Deleted so far: {count}")
+            except Exception as e:
+                print(f"Error deleting messages in thread {thread.id}: {repr(e)}")
+        is_processing_clean_up = False
+        return count
+    except Exception as e:
+        print(f"Error cleaning up messages: {repr(e)}")
+        is_processing_clean_up = False
+        return count
+
+async def rate_limit_purge(channel, batch_size, check=None, before=None):
+    deleted = 0
+    check_count = 0
+    total_check_count = 0
+    purge_start = datetime.datetime.now()
+    async for message in channel.history(limit=None, before=before):
+        process_start = datetime.datetime.now()
+        check_count += 1
+        total_check_count += 1
+        if check is None or check(message):
+            try:
+                await try_delete(message)
+                deleted += 1
+            except Exception as e:
+                print(f"Error deleting message {message.id}: {repr(e)}")
+        process_time = datetime.datetime.now() - process_start
+        if process_time.total_seconds() > 1:
+            print(f"OUTLIER: Processed message {total_check_count} in {process_time}, deleted {deleted} messages")
+        elif (deleted % 5 == 0 and deleted > 0):
+            await asyncio.sleep(5)
+        if(total_check_count % batch_size == 0 and deleted > 0):
+            purge_end = datetime.datetime.now()
+            print(f"Continuing purge. Checked {total_check_count} messages and deleted {deleted} total messages for channel {channel}. Duration: {purge_end - purge_start}. Time: {purge_end}")
+    return deleted
+
+async def try_delete(message):
+    try:
+        # Make a request to the Discord API
+        # print(f"Deleting message {message.id}")
+        await message.delete()
+        # await asyncio.sleep(0.65)
+    except discord.RateLimited as e:
+        secondsToSleep = int(e.retry_after)
+        print(f"Rate limited, waiting {5} seconds")
+        await asyncio.sleep(5)
+        await try_delete(message)
+        # if e.code == 429 and 'Retry-After' in e.response.headers:
+        #     secondsToSleep = int(e.response.headers['Retry-After'])
+        #     print(f"Rate limited, waiting {secondsToSleep} seconds")
+        # if e.status == 429:
+        #     Wait for the rate limit to reset
+        #     wait_time = int(e.response.headers.get("Retry-After", 1))
+        #     print(f'Rate limited, waiting {wait_time} seconds')
+        #     await asyncio.sleep(wait_time)
+        #     await try_delete(message)
+        # else:
+        #     Raise the exception for other status codes
+        #     print(f"Error deleting message {message.id}: {repr(e)}")
+
+
+
 
 def should_delete(message) -> bool:
     global count
@@ -117,18 +201,21 @@ def has_save_emoji(message, saveEmojiName) -> bool:
 #Log data about save reactions
 @bot.event
 async def on_raw_reaction_add(payload):
-    msg_channel = bot.get_channel(payload.channel_id)
-    msg = await msg_channel.fetch_message(payload.message_id)
-    user = bot.get_user(payload.user_id)
-    save_emoji_name = bot_config.get_guild_data(str(payload.guild_id), "SAVE_EMOJI_NAME")
-    if (payload.emoji.name == save_emoji_name):
-        embedVar = discord.Embed(title=f"User {payload.member.display_name} saved post", color=0x00ff00)
-        embedVar.add_field(name="Original Author", value=f"{msg.author.display_name}", inline=True)
-        embedVar.add_field(name="Saved By", value=f"{user.display_name}", inline=True)
-        embedVar.add_field(name="Link", value=f"{msg.jump_url}", inline=True)
-        embedVar.add_field(name="Time Saved", value=f"{datetime.datetime.now()}", inline=True)
-        bot_logs_channel = bot_config.get_guild_data(str(payload.guild_id), "BOT_LOGS_CHANNEL")
-        await bot.get_channel(bot_logs_channel).send(embed=embedVar)
+    try:
+        msg_channel = bot.get_channel(payload.channel_id)
+        msg = await msg_channel.fetch_message(payload.message_id)
+        user = bot.get_user(payload.user_id)
+        save_emoji_name = bot_config.get_guild_data(str(payload.guild_id), "SAVE_EMOJI_NAME")
+        if (payload.emoji.name == save_emoji_name):
+            embedVar = discord.Embed(title=f"User {payload.member.display_name} saved post", color=0x00ff00)
+            embedVar.add_field(name="Original Author", value=f"{msg.author.display_name}", inline=True)
+            embedVar.add_field(name="Saved By", value=f"{user.display_name}", inline=True)
+            embedVar.add_field(name="Link", value=f"{msg.jump_url}", inline=True)
+            embedVar.add_field(name="Time Saved", value=f"{datetime.datetime.now()}", inline=True)
+            bot_logs_channel = bot_config.get_guild_data(str(payload.guild_id), "BOT_LOGS_CHANNEL")
+            await bot.get_channel(bot_logs_channel).send(embed=embedVar)
+    except discord.errors.Forbidden as e:
+        print(f"Forbidden error: {repr(e)}. Channel ID: {msg_channel.id}, Message ID: {payload.message_id}")
 
 #Logging bot details
 @bot.event
@@ -142,13 +229,14 @@ async def on_ready():
     
 @bot.event
 async def on_resumed():
-    await logAll("Bot has reconnected.")
-    print("Bot has reconnected.")
+    # await logAll("Bot has reconnected.")
+    print("STATUS: Bot has reconnected.")
 
 
 @bot.event
 async def on_disconnect():
-    await logAll("Bot has disconnected.")
+    print("STATUS: Bot has disconnected.")
+    # await logAll("Bot has disconnected.")
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
@@ -162,9 +250,9 @@ async def logAll(message):
         for guild_id, guild in bot_config.config["GUILDS"].items():
             await log(message, guild_id)
     except KeyError as e:
-        print(f"KeyError: {e}")
+        print(f"KeyError: {repr(e)}")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"Unexpected error: {repr(e)}")
 
 async def log(message, guildId):
     try:
@@ -174,7 +262,7 @@ async def log(message, guildId):
         else:
             print(f"Channel not found for guild {guildId}")
     except Exception as e:
-        print(f"Failed to log message to guild {guildId}: {e}")
+        print(f"Failed to log message to guild {guildId}: {repr(e)}")
 
 #Command to log all messages with the reaction currently in the server
 @bot.tree.command(
@@ -219,61 +307,68 @@ async def bot_check(interaction):
 @bot.tree.command(name="config", description="Configure the bot settings.")
 @has_mod_role()
 async def config(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
     view = ConfigView(interaction.guild, bot_config)
     description = "Select some configuration values for the bot. Then hit next to open the modal for more configuration values.\
      \nMod Role - The role that has permission to use the bot's commands. \nNotifications - Where the bot will send notifications for users joining/leaving. \
      \nBot Logs - Where the bot will errors, statuses and message saves. \n Delete Bot Messages - Whether the bot will delete it's own messages."
     embed = discord.Embed(title="Configure Bot Settings", description=description)
-    await interaction.response.send_message("Configure the bot settings:", embed=embed, view=view, ephemeral=True)
+    await interaction.followup.send("Configure the bot settings:", embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="sync", description="Sync the command tree.")
 @has_mod_role()
 async def sync(interaction: discord.Interaction):
     try:
+        await interaction.response.defer(ephemeral=True)
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} commands")
         await interaction.response.send_message(f'Command tree synced. {len(synced)} commands synchronized.', ephemeral=True)
     except Exception as e:
-        print(f"Failed to sync: {e}")
-        await interaction.response.send_message(f'Failed to sync commands: {e}', ephemeral=True)
+        print(f"Failed to sync: {repr(e)}")
+        await interaction.response.send_message(f'Failed to sync commands: {repr(e)}', ephemeral=True)
 
 @bot.tree.command(name="enable-delete", description="Enable the deletion of messages.")
 @has_mod_role()
 async def enable_delete(interaction: discord.Interaction):
     try:
+        await interaction.response.defer(ephemeral=True)
         enabled = (bot_config.get_guild_data(str(interaction.guild_id), "DELETE_ENABLED")  == "True")
         if enabled:
-            await interaction.response.send_message(f'Deletion is already enabled.', ephemeral=True)
+            await interaction.followup.send(f'Deletion is already enabled.', ephemeral=True)
             return
-        bot_config.set_guild_data(str(interaction.guild_id), "DELETE_ENABLED", True)
-        await interaction.response.send_message(f'CDeletion enabled.', ephemeral=True)
+        bot_config.set_guild_data(str(interaction.guild_id), "DELETE_ENABLED", "True")
+        bot_config.save_config("config.json")
+        await interaction.followup.send(f'Deletion enabled.', ephemeral=True)
     except Exception as e:
-        print(f"Failed to enable deletion: {e}")
-        await interaction.response.send_message(f'Failed to enable deletion: {e}', ephemeral=True)
+        print(f"Failed to enable deletion: {repr(e)}")
+        await interaction.followup.send(f'Failed to enable deletion: {repr(e)}', ephemeral=True)
 
 @bot.tree.command(name="disable-delete", description="Disable the deletion of messages.")
 @has_mod_role()
 async def disable_delete(interaction: discord.Interaction):
     try:
+        await interaction.response.defer(ephemeral=True)
         enabled = (bot_config.get_guild_data(str(interaction.guild_id), "DELETE_ENABLED")  == "True")
         if not enabled:
-            await interaction.response.send_message(f'Deletion is already disabled.', ephemeral=True)
+            await interaction.followup.send(f'Deletion is already disabled.', ephemeral=True)
             return
-        bot_config.set_guild_data(str(interaction.guild_id), "DELETE_ENABLED", False)
-        await interaction.response.send_message(f'Deletion disabled.', ephemeral=True)
+        bot_config.set_guild_data(str(interaction.guild_id), "DELETE_ENABLED", "False")
+        bot_config.save_config("config.json")
+        await interaction.followup.send(f'Deletion disabled.', ephemeral=True)
     except Exception as e:
-        print(f"Failed to disable deletion: {e}")
-        await interaction.response.send_message(f'Failed to disable deletion: {e}', ephemeral=True)
+        print(f"Failed to disable deletion: {repr(e)}")
+        await interaction.followup.send(f'Failed to disable deletion: {repr(e)}', ephemeral=True)
 
 @bot.tree.command(name="is-delete-enabled", description="Check if deletion is enabled.")
 @has_mod_role()
 async def is_delete_enabled(interaction: discord.Interaction):
     try:
+        await interaction.response.defer(ephemeral=True)
         enabled = (bot_config.get_guild_data(str(interaction.guild_id), "DELETE_ENABLED")  == "True")
-        await interaction.response.send_message(f'Deletion enabled: {enabled}', ephemeral=True)
+        await interaction.followup.send(f'Deletion enabled: {enabled}', ephemeral=True)
     except Exception as e:
-        print(f"Failed to check if deletion is enabled: {e}")
-        await interaction.response.send_message(f'Failed to check if deletion is enabled: {e}', ephemeral=True)
+        print(f"Failed to check if deletion is enabled: {repr(e)}")
+        await interaction.followup.send(f'Failed to check if deletion is enabled: {repr(e)}', ephemeral=True)
 
 class DailyAction(commands.Cog):
     def __init__(self, bot, bot_config) -> None:
@@ -293,6 +388,9 @@ class DailyAction(commands.Cog):
             messageAgeLimit = int(self.bot_config.get_guild_data(guild_id_str, "MESSAGE_AGE_LIMIT"))
             await log(f"Cleaning up messages that aren't saved and are over {messageAgeLimit} days old.", guild_id_str)
             deleted = await clean_up_messages(guild_id)
+            if(deleted == -1):
+                await log(f"Aborted clean-up due to one already being in process.", guild_id_str)
+                continue
             await log(f"Deleted {deleted} messages", guild_id_str)
 
 bot.run(BOT_TOKEN)

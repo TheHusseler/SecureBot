@@ -82,6 +82,7 @@ class ConfigModal(Modal):
             if guild_id in self.bot_config.config["GUILDS"]: 
                 self.bot_config.config["GUILDS"][guild_id].update(guild_data)
             else:
+                guild_data["DELETE_ENABLED"] = False
                 self.bot_config.config["GUILDS"][guild_id] = guild_data
             
             self.bot_config.save_config("config.json")
@@ -150,6 +151,7 @@ class ConfigView(View):
             if guild_id in self.bot_config.config["GUILDS"]:
                 self.bot_config.config["GUILDS"][guild_id].update(guild_data)
             else:
+                guild_data["DELETE_ENABLED"] = False
                 self.bot_config.config["GUILDS"][guild_id] = guild_data
 
             self.bot_config.save_config("config.json")
